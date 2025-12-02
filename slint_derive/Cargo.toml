@@ -1,0 +1,18 @@
+[package]
+name = "slint_derive"
+version = "0.1.0"
+edition = "2024"
+authors = ["Joseph Christopher <joechristophersc@gmail.com>"]
+description = "An async Rust ORM that auto-generates tables and CRUD from structs"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/joechristophers/slintrust"
+keywords = ["orm", "rust", "async", "sqlx"]
+categories = ["database"]
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = "2.0"         
+quote = "1.0"
+proc-macro2 = "1.0"

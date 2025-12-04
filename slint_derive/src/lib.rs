@@ -33,69 +33,89 @@ pub fn slint(attr: TokenStream, item: TokenStream) -> TokenStream {
     let mut cols = Vec::new();
 
     for f in fields {
-        let col_name = f.ident.as_ref().unwrap().to_string();
-        let sql_type = "TEXT";
-        let mut primary = false;
-        let mut unique = false;
-        let mut uuid = false;
-        let mut not_null = true;
+    let col_name = f.ident.as_ref().unwrap().to_string();
+    let sql_type = "TEXT";
+    let mut primary = false;
+    let mut unique = false;
+    let mut uuid = false;
+    let mut not_null = true;
 
-        // Optional extra fields
-        let mut default: Option<String> = None;
-        let mut foreign_key: Option<String> = None;
-        let mut relationship: Option<String> = None;
+    // Optional extra fields
+    let mut default: Option<String> = None;
+    let mut foreign_key: Option<String> = None;
+    let mut relationship: Option<String> = None;
 
-        for attr in &f.attrs {
-            if attr.path().is_ident("slint") {
-                let _ = attr.parse_nested_meta(|meta| {
-                    let ident = meta.path.get_ident().map(|i| i.to_string());
+    for attr in &f.attrs {
 
-                    match ident.as_deref() {
-                        Some("uuid") => { uuid = true; primary = true; },
-                        Some("primary") => primary = true,
-                        Some("unique") => unique = true,
-                        Some("not_null") => not_null = true,
-                        Some("default") => {
-                            if let Ok(lit) = meta.value()?.parse::<Lit>() {
-                                if let Lit::Str(litstr) = lit {
-                                    default = Some(litstr.value());
-                                }
+        // Existing attribute parsing
+        if attr.path().is_ident("slint") {
+            let _ = attr.parse_nested_meta(|meta| {
+                let ident = meta.path.get_ident().map(|i| i.to_string());
+
+                match ident.as_deref() {
+                    Some("uuid") => { uuid = true; primary = true; }
+                    Some("primary") => primary = true,
+                    Some("unique") => unique = true,
+                    Some("not_null") => not_null = true,
+                    Some("default") => {
+                        if let Ok(lit) = meta.value()?.parse::<Lit>() {
+                            if let Lit::Str(litstr) = lit {
+                                default = Some(litstr.value());
                             }
                         }
-                        Some("foreign_key") => {
-                            if let Ok(lit) = meta.value()?.parse::<Lit>() {
-                                if let Lit::Str(litstr) = lit {
-                                    foreign_key = Some(litstr.value());
-                                }
-                            }
-                        }
-                        Some("relationship") => {
-                            if let Ok(lit) = meta.value()?.parse::<Lit>() {
-                                if let Lit::Str(litstr) = lit {
-                                    relationship = Some(litstr.value());
-                                }
-                            }
-                        }
-                        _ => {}
                     }
+                    Some("foreign_key") => {
+                        if let Ok(lit) = meta.value()?.parse::<Lit>() {
+                            if let Lit::Str(litstr) = lit {
+                                foreign_key = Some(litstr.value());
+                            }
+                        }
+                    }
+                    Some("relationship") => {
+                        if let Ok(lit) = meta.value()?.parse::<Lit>() {
+                            if let Lit::Str(litstr) = lit {
+                                relationship = Some(litstr.value());
+                            }
+                        }
+                    }
+                    _ => {}
+                }
 
-                    Ok(())
-                });
-            }
+                Ok(())
+            });
         }
 
-        // Only assign fields that exist in ColumnSchema
-        cols.push(quote! {
-            ColumnSchema {
-                name: #col_name,
-                sql_type: #sql_type,
-                primary: #primary,
-                unique: #unique,
-                not_null: #not_null,
-                uuid: #uuid,
-            }
-        });
+        // New: field-level macro
+        if attr.path().is_ident("slint_internal_field") {
+            attr.parse_nested_meta(|meta| {
+                let ident = meta.path.get_ident().unwrap().to_string();
+
+                match ident.as_str() {
+                    "primary_key" => primary = true,
+                    "uuid" => { uuid = true; primary = true; }
+                    "unique" => unique = true,
+                    "not_null" => not_null = true,
+                    _ => {}
+                };
+
+                Ok(())
+            }).unwrap();
+        }
     }
+
+    // Build ColumnSchema
+    cols.push(quote! {
+        ColumnSchema {
+            name: #col_name,
+            sql_type: #sql_type,
+            primary: #primary,
+            unique: #unique,
+            not_null: #not_null,
+            uuid: #uuid,
+        }
+    });
+}
+
 
     // -------- generate output --------
     let expanded = quote! {
@@ -116,4 +136,22 @@ pub fn slint(attr: TokenStream, item: TokenStream) -> TokenStream {
 
 
 
+
+
+
+
+#[proc_macro_attribute]
+pub fn slint_field(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let args = attr.to_string();
+    let field = item.to_string();
+
+    // Rewrite into a normal attribute
+    let out = format!(
+        "#[slint_internal_field({})]\n{}",
+        args,
+        field
+    );
+
+    out.parse().unwrap()
+}
 

@@ -1,6 +1,6 @@
 [package]
 name = "slintrust"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 authors = ["Joseph Christopher <joechristophersc@gmail.com>"]
 description = "An async Rust ORM that auto-generates tables and CRUD from structs"
@@ -16,5 +16,6 @@ uuid = { version = "1", features = ["v4"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 async-trait = "0.1"
-slint_derive = "0.1.0"
+slint_derive = "0.1.1"
+# slint_derive = { path = "./slint_derive" }
 

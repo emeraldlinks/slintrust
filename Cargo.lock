@@ -1183,9 +1183,9 @@ checksum = "7a2ae44ef20feb57a68b23d846850f861394c2e02dc425a50098ae8c90267589"
 
 [[package]]
 name = "slint_derive"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e82edd9a69e53f8bd07cdfccfbe4b0fc058bd5a749f7cc00580faf8711c23c53"
+checksum = "2b3124a81a52625c52c23f4dbd79c551e30b618137f20e3675ffb23f4ba288ec"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1194,7 +1194,7 @@ dependencies = [
 
 [[package]]
 name = "slintrust"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "serde",

@@ -1,20 +1,19 @@
 use crate::libs::schema::TableSchema;
-use sqlx::{PgPool,  query_as, query};
-use sqlx::postgres::{PgPoolOptions};
+use crate::query_builder::QueryBuilder;
 use serde::Serialize;
-use uuid::Uuid;
 use serde::de::DeserializeOwned;
-use sqlx::Row;
 use sqlx::Column;
-
-
-
-
+use sqlx::Row;
+use sqlx::postgres::PgPoolOptions;
+use sqlx::{PgPool, query, query_as};
+use uuid::Uuid;
+use serde_json::Value;
 
 pub struct OrmStruct {
     pub database_url: String,
     pool: Option<PgPool>,
     pub schemas: Vec<TableSchema>,
+    limit: u32,
 }
 
 impl OrmStruct {
@@ -24,8 +23,12 @@ impl OrmStruct {
             database_url,
             pool: None,
             schemas,
+            limit: 0,
         }
     }
+
+   
+
 
     pub async fn connect(&mut self) -> sqlx::Result<()> {
         let pool = PgPoolOptions::new()
@@ -48,13 +51,23 @@ impl OrmStruct {
     pub async fn migrate(&self) -> sqlx::Result<()> {
         for schema in &self.schemas {
             let mut sql = format!("CREATE TABLE IF NOT EXISTS {} (", schema.name);
-            let cols: Vec<String> = schema.columns.iter().map(|c| {
-                let mut col_def = format!("{} {}", c.name, c.sql_type);
-                if c.primary { col_def.push_str(" PRIMARY KEY") }
-                if c.unique { col_def.push_str(" UNIQUE") }
-                if c.not_null { col_def.push_str(" NOT NULL") }
-                col_def
-            }).collect();
+            let cols: Vec<String> = schema
+                .columns
+                .iter()
+                .map(|c| {
+                    let mut col_def = format!("{} {}", c.name, c.sql_type);
+                    if c.primary {
+                        col_def.push_str(" PRIMARY KEY")
+                    }
+                    if c.unique {
+                        col_def.push_str(" UNIQUE")
+                    }
+                    if c.not_null {
+                        col_def.push_str(" NOT NULL")
+                    }
+                    col_def
+                })
+                .collect();
             sql.push_str(&cols.join(", "));
             sql.push(')');
             query(&sql).execute(self.pool()).await?;
@@ -67,7 +80,9 @@ impl OrmStruct {
     where
         T: Serialize,
     {
-        let schema = self.schemas.iter()
+        let schema = self
+            .schemas
+            .iter()
             .find(|s| s.name == table_name)
             .expect("Table schema not found");
 
@@ -108,68 +123,198 @@ impl OrmStruct {
     }
 
     // -------- Get first record by column --------
-    pub async fn first<T>(&self, table_name: &str, column: &str, value: &str) -> sqlx::Result<Option<T>>
-    where
-        T: DeserializeOwned,
-    {
-        let schema = self.schemas.iter()
-            .find(|s| s.name == table_name)
-            .expect("Table schema not found");
+    pub async fn first<T>(
+    &self,
+    table_name: &str,
+    column: &str,
+    value: &str,
+) -> sqlx::Result<Option<T>>
+where
+    T: DeserializeOwned,
+{
+    let schema = self
+        .schemas
+        .iter()
+        .find(|s| s.name == table_name)
+        .expect("Table schema not found");
 
-        let sql = format!("SELECT * FROM {} WHERE {} = $1 LIMIT 1", schema.name, column);
-        let row = sqlx::query(&sql)
-            .bind(value)
-            .fetch_optional(self.pool())
-            .await?;
+    let sql = format!(
+        "SELECT * FROM {} WHERE {} = $1 LIMIT 1",
+        schema.name, column
+    );
 
-        if let Some(r) = row {
-            let mut map = serde_json::Map::new();
-            for col in r.columns() {
-                let val: Option<String> = r.try_get(col.name()).ok();
-                map.insert(col.name().to_string(), serde_json::Value::String(val.unwrap_or_default()));
-            }
-            let obj = serde_json::from_value::<T>(serde_json::Value::Object(map))
-                .map_err(|e| sqlx::Error::ColumnDecode { index: "serde_json".into(), source: Box::new(e) })?;
-            Ok(Some(obj))
-        } else {
-            Ok(None)
+    let row = sqlx::query(&sql)
+        .bind(value)
+        .fetch_optional(self.pool())
+        .await?;
+
+    if let Some(r) = row {
+        let mut map = serde_json::Map::new();
+
+        for col in r.columns() {
+            let col_name = col.name();
+            let value = match r.try_get::<Option<i64>, _>(col_name) {
+                Ok(Some(v)) => Value::from(v),
+                Ok(None) => Value::Null,
+                Err(_) => match r.try_get::<Option<f64>, _>(col_name) {
+                    Ok(Some(v)) => Value::from(v),
+                    Ok(None) => Value::Null,
+                    Err(_) => match r.try_get::<Option<bool>, _>(col_name) {
+                        Ok(Some(v)) => Value::from(v),
+                        Ok(None) => Value::Null,
+                        Err(_) => match r.try_get::<Option<String>, _>(col_name) {
+                            Ok(Some(v)) => Value::from(v),
+                            Ok(None) => Value::Null,
+                            Err(_) => Value::Null, // fallback
+                        },
+                    },
+                },
+            };
+            map.insert(col_name.to_string(), value);
         }
+
+        let obj = serde_json::from_value::<T>(Value::Object(map)).map_err(|e| {
+            sqlx::Error::ColumnDecode {
+                index: "serde_json".into(),
+                source: Box::new(e),
+            }
+        })?;
+
+        Ok(Some(obj))
+    } else {
+        Ok(None)
     }
+}
+
+     // -------- Fetch multiple records --------
+   
+pub async fn find<T>(
+    &self,
+    table_name: &str,
+    column: &str,
+    filter: &str,
+) -> sqlx::Result<Vec<T>>
+where
+    T: DeserializeOwned,
+{
+    let schema = self
+        .schemas
+        .iter()
+        .find(|s| s.name == table_name)
+        .expect("Table schema not found");
+
+    let sql = format!("SELECT * FROM {} WHERE {} = $1", schema.name, column);
+    let rows = sqlx::query(&sql)
+        .bind(filter)
+        .fetch_all(self.pool())
+        .await?;
+
+    let mut result = Vec::with_capacity(rows.len());
+
+    for row in rows {
+        let mut map = serde_json::Map::new();
+        for col in row.columns() {
+            let col_name = col.name();
+            let value = match row.try_get::<Option<i64>, _>(col_name) {
+                Ok(Some(v)) => Value::from(v),
+                Ok(None) => Value::Null,
+                Err(_) => match row.try_get::<Option<f64>, _>(col_name) {
+                    Ok(Some(v)) => Value::from(v),
+                    Ok(None) => Value::Null,
+                    Err(_) => match row.try_get::<Option<bool>, _>(col_name) {
+                        Ok(Some(v)) => Value::from(v),
+                        Ok(None) => Value::Null,
+                        Err(_) => match row.try_get::<Option<String>, _>(col_name) {
+                            Ok(Some(v)) => Value::from(v),
+                            Ok(None) => Value::Null,
+                            Err(_) => Value::Null,
+                        },
+                    },
+                },
+            };
+            map.insert(col_name.to_string(), value);
+        }
+
+        let obj = serde_json::from_value::<T>(Value::Object(map)).map_err(|e| {
+            sqlx::Error::ColumnDecode {
+                index: "serde_json".into(),
+                source: Box::new(e),
+            }
+        })?;
+        result.push(obj);
+    }
+
+    Ok(result)
+}
+
 
 
     // -------- Get all records --------
-       pub async fn get_all<T>(&self, table_name: &str) -> sqlx::Result<Vec<T>>
-    where
-        T: DeserializeOwned,
-    {
-        let schema = self.schemas.iter()
-            .find(|s| s.name == table_name)
-            .expect("Table schema not found");
+   pub async fn get_all<T>(&self, table_name: &str) -> sqlx::Result<Vec<T>>
+where
+    T: DeserializeOwned,
+{
+    let schema = self
+        .schemas
+        .iter()
+        .find(|s| s.name == table_name)
+        .expect("Table schema not found");
 
-        let sql = format!("SELECT * FROM {}", schema.name);
-        let rows = sqlx::query(&sql).fetch_all(self.pool()).await?;
+    let sql = format!("SELECT * FROM {}", schema.name);
+    let rows = sqlx::query(&sql).fetch_all(self.pool()).await?;
 
-        let mut results = Vec::with_capacity(rows.len());
-        for r in rows {
-            let mut map = serde_json::Map::new();
-            for col in r.columns() {
-                let val: Option<String> = r.try_get(col.name()).ok();
-                map.insert(col.name().to_string(), serde_json::Value::String(val.unwrap_or_default()));
-            }
-            let obj = serde_json::from_value::<T>(serde_json::Value::Object(map))
-                .map_err(|e| sqlx::Error::ColumnDecode { index: "serde_json".into(), source: Box::new(e) })?;
-            results.push(obj);
+    let mut results = Vec::with_capacity(rows.len());
+
+    for r in rows {
+        let mut map = serde_json::Map::new();
+        for col in r.columns() {
+            let col_name = col.name();
+            let value = match r.try_get::<Option<i64>, _>(col_name) {
+                Ok(Some(v)) => Value::from(v),
+                Ok(None) => Value::Null,
+                Err(_) => match r.try_get::<Option<f64>, _>(col_name) {
+                    Ok(Some(v)) => Value::from(v),
+                    Ok(None) => Value::Null,
+                    Err(_) => match r.try_get::<Option<bool>, _>(col_name) {
+                        Ok(Some(v)) => Value::from(v),
+                        Ok(None) => Value::Null,
+                        Err(_) => match r.try_get::<Option<String>, _>(col_name) {
+                            Ok(Some(v)) => Value::from(v),
+                            Ok(None) => Value::Null,
+                            Err(_) => Value::Null,
+                        },
+                    },
+                },
+            };
+            map.insert(col_name.to_string(), value);
         }
 
-        Ok(results)
+        let obj = serde_json::from_value::<T>(Value::Object(map)).map_err(|e| {
+            sqlx::Error::ColumnDecode {
+                index: "serde_json".into(),
+                source: Box::new(e),
+            }
+        })?;
+        results.push(obj);
     }
 
+    Ok(results)
+}
+
     // -------- Update record --------
-    pub async fn update<T>(&self, table_name: &str, column: &str, value: &str, item: &T) -> sqlx::Result<()>
+    pub async fn update<T>(
+        &self,
+        table_name: &str,
+        column: &str,
+        value: &str,
+        item: &T,
+    ) -> sqlx::Result<()>
     where
         T: Serialize,
     {
-        let schema = self.schemas.iter()
+        let schema = self
+            .schemas
+            .iter()
             .find(|s| s.name == table_name)
             .expect("Table schema not found");
 
@@ -209,34 +354,31 @@ impl OrmStruct {
 
     // -------- Delete record --------
     pub async fn delete(&self, table_name: &str, column: &str, value: &str) -> sqlx::Result<()> {
-        let schema = self.schemas.iter()
+        let schema = self
+            .schemas
+            .iter()
             .find(|s| s.name == table_name)
             .expect("Table schema not found");
 
         let sql = format!("DELETE FROM {} WHERE {} = $1", schema.name, column);
-        query(&sql)
-            .bind(value)
-            .execute(self.pool())
-            .await?;
+        query(&sql).bind(value).execute(self.pool()).await?;
         Ok(())
     }
 
     // -------- Check if record exists --------
     pub async fn exists(&self, table_name: &str, column: &str, value: &str) -> sqlx::Result<bool> {
-        let schema = self.schemas.iter()
+        let schema = self
+            .schemas
+            .iter()
             .find(|s| s.name == table_name)
             .expect("Table schema not found");
 
         let sql = format!(
             "SELECT EXISTS(SELECT 1 FROM {} WHERE {} = $1)",
-            schema.name,
-            column
+            schema.name, column
         );
 
-        let row: (bool,) = query_as(&sql)
-            .bind(value)
-            .fetch_one(self.pool())
-            .await?;
+        let row: (bool,) = query_as(&sql).bind(value).fetch_one(self.pool()).await?;
         Ok(row.0)
     }
 
@@ -244,4 +386,19 @@ impl OrmStruct {
     pub async fn raw(&self, sql: &str) -> sqlx::Result<sqlx::postgres::PgQueryResult> {
         query(sql).execute(self.pool()).await
     }
+
+
+
+
+
+      pub fn query<'a>(&'a self, table: &str) -> QueryBuilder<'a> {
+    let pool = self.pool.as_ref().expect("DB pool not initialized");
+    QueryBuilder::new(table, pool)
 }
+}
+
+
+
+
+
+

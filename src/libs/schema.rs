@@ -1,3 +1,6 @@
+///
+
+
 // schema.rs
 #[derive(Debug)]
 pub struct ColumnSchema {
@@ -7,10 +10,12 @@ pub struct ColumnSchema {
     pub unique: bool,
     pub not_null: bool,
     pub uuid: bool,
+    
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TableSchema {
     pub name: &'static str,
     pub columns: &'static [ColumnSchema],
 }
+

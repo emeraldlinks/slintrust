@@ -159,6 +159,14 @@ impl<'a> QueryBuilder<'a> {
         Ok(results)
     }
 
+    pub fn where_clause(&self) -> String {
+        if self.wheres.is_empty() {
+            "".to_string()
+        } else {
+            format!("WHERE {}", self.wheres.join(" AND "))
+        }
+    }
+
     pub async fn fetch_one<T>(&self) -> Result<T, sqlx::Error>
     where
         T: DeserializeOwned,

@@ -1,6 +1,6 @@
 [package]
 name = "slintrust"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2024"
 authors = ["Joseph Christopher <joechristophersc@gmail.com>"]
 description = "An async Rust ORM that auto-generates tables and CRUD from structs"

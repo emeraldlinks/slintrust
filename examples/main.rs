@@ -4,7 +4,7 @@ use slintrust::*;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
- // adjust path if needed
+// adjust path if needed
 
 // =======================
 // Models
@@ -38,10 +38,7 @@ async fn main() -> sqlx::Result<()> {
     // -----------------------
     let mut orm = OrmStruct::new(
         "postgres://postgres@localhost:5432/postgres".into(),
-        vec![
-            User::slint_schema(),
-            Postsx::slint_schema(),
-        ],
+        vec![User::slint_schema(), Postsx::slint_schema()],
     );
 
     orm.connect().await?;
@@ -68,8 +65,7 @@ async fn main() -> sqlx::Result<()> {
 
     println!("Users via old query API: {:?}", users.len());
 
-    let ada: Option<User> =
-        orm.first("userx_table", "email", "ada@mail.com").await?;
+    let ada: Option<User> = orm.first("userx_table", "email", "ada@mail.com").await?;
 
     println!("First user via old API: {:?}", ada);
 
@@ -77,24 +73,24 @@ async fn main() -> sqlx::Result<()> {
     // NEW ORM API (typed)
     // =======================
 
-    let user_table = Table::<User>::new(orm.clone(), "userx_table", "email");
-    let post_table = Table::<Postsx>::new(orm.clone(), "postsx_table", "email");
+    let user_table = Table::<User>::new(&orm, "userx_table", "email");
+    let post_table = Table::<Postsx>::new(&orm, "postsx_table", "id");
 
     // -----------------------
     // Insert
     // -----------------------
-    user_table.insert(&User {
-        id: "".into(),
-        name: "Grace".into(),
-        email: "grace@mail.com".into(),
-    }).await?;
+    user_table
+        .insert(&User {
+            id: "".into(),
+            name: "Grace".into(),
+            email: "grace@mail.com".into(),
+        })
+        .await?;
 
     // -----------------------
     // Get single record
     // -----------------------
-    let record = user_table
-        .get(json!({ "email": "ada@mail.com" }))
-        .await?;
+    let record = user_table.get(json!({ "email": "ada@mail.com" })).await?;
 
     if let Some(user) = &record {
         println!("Fetched via Table.get(): {:?}", user.value);
@@ -147,10 +143,16 @@ async fn main() -> sqlx::Result<()> {
         // ----------------<|fim_middle|><|fim_middle|><|fim_middle|>
         // Delete
         // -----------------------
-        userx.delete().await?;
-        println!("User deleted");
+        // userx.delete().await?;
+        // println!("User deleted");
     }
 
+    let first_userx = user_table
+        .query()
+        .where_clause("email", "=", "ada@mail.com")
+        .first_value()
+        .await?;
+    println!("First_Value via new Query API: {:?}", first_userx);
 
     Ok(())
 }

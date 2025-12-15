@@ -1,7 +1,7 @@
 use crate::OrmStruct;
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
-use sqlx::{Row, Column};
+use sqlx::{Column, Row};
 
 /// A typed handle to a database table.
 pub struct Table<T> {
@@ -19,13 +19,13 @@ where
     /// ```
     /// let user_table = Table::<User>::new(orm.clone(), "users");
     /// ```
-    pub fn new(orm: OrmStruct, name: &str, key_column: &str) -> Self {
-        Self::with_key(orm, name, key_column)
+    pub fn new(orm: &OrmStruct, name: &str, key_column: &str) -> Self {
+        Self::with_key(orm.to_owned(), name, key_column)
     }
 
     /// Create a new table handle with a custom key column.
     /// ```
-    /// let user_table = Table::<User>::with_key(orm.clone(), "users", "user_id");
+    /// let user_table = Table::<User>::with_key(orm.as_ref(), "users", "user_id");
     /// ```
     pub fn with_key(orm: OrmStruct, name: &str, key_column: &str) -> Self {
         Self {
@@ -40,7 +40,7 @@ where
     ///
     /// # Example
     /// ```
-    /// let user_table = Table::<User>::new(orm.clone(), "users");
+    /// let user_table = Table::<User>::new(&orm, "users");
     /// user_table.insert(&new_user).await?;
     /// ```
     pub async fn insert(&self, item: &T) -> sqlx::Result<()> {
@@ -64,7 +64,14 @@ where
             .orm
             .first::<T>(&self.name, column, value.as_str().unwrap())
             .await?;
-        Ok(obj.map(|o| Record::new(self.name.clone(), o, self.key_column.clone(), self.orm.clone())))
+        Ok(obj.map(|o| {
+            Record::new(
+                self.name.clone(),
+                o,
+                self.key_column.clone(),
+                self.orm.clone(),
+            )
+        }))
     }
 
     /// Get all records from the table.
@@ -77,7 +84,14 @@ where
         let all = self.orm.get_all::<T>(&self.name).await?;
         Ok(all
             .into_iter()
-            .map(|o| Record::new(self.name.clone(), o, self.key_column.clone(), self.orm.clone()))
+            .map(|o| {
+                Record::new(
+                    self.name.clone(),
+                    o,
+                    self.key_column.clone(),
+                    self.orm.clone(),
+                )
+            })
             .collect())
     }
 
@@ -116,8 +130,18 @@ where
     T: Serialize + DeserializeOwned + Send + Sync,
 {
     pub fn new(table_name: String, value: T, key_column: String, orm: OrmStruct) -> Self {
-        let id = serde_json::to_value(&value).unwrap().get(&key_column).unwrap().clone();
-        Self { table_name, value, key_column, orm, id }
+        let id = serde_json::to_value(&value)
+            .unwrap()
+            .get(&key_column)
+            .unwrap()
+            .clone();
+        Self {
+            table_name,
+            value,
+            key_column,
+            orm,
+            id,
+        }
     }
 
     /// Update the current record with changes.
@@ -134,7 +158,13 @@ where
             sets.push(format!("{} = ${}", key, values.len() + 1));
             values.push(value.as_str().expect("value must be string").to_string());
         }
-        let sql = format!("UPDATE {} SET {} WHERE {} = ${}", self.table_name, sets.join(", "), self.key_column, values.len() + 1);
+        let sql = format!(
+            "UPDATE {} SET {} WHERE {} = ${}",
+            self.table_name,
+            sets.join(", "),
+            self.key_column,
+            values.len() + 1
+        );
         let mut query = sqlx::query(&sql);
         for value in &values {
             query = query.bind(value);
@@ -143,7 +173,12 @@ where
         query.execute(self.orm.pool.as_ref().unwrap()).await?;
 
         // Fetch the updated record
-        let updated = self.orm.query(&self.table_name).r#where(&self.key_column, "=", self.id.as_str().unwrap()).fetch_one().await?;
+        let updated = self
+            .orm
+            .query(&self.table_name)
+            .r#where(&self.key_column, "=", self.id.as_str().unwrap())
+            .fetch_one()
+            .await?;
         Ok(updated)
     }
 
@@ -241,7 +276,11 @@ where
     }
 
     pub async fn get(self) -> sqlx::Result<Vec<Record<T>>> {
-        let select_clause = if self.distinct { "SELECT DISTINCT *" } else { "SELECT *" };
+        let select_clause = if self.distinct {
+            "SELECT DISTINCT *"
+        } else {
+            "SELECT *"
+        };
         let mut sql = format!("{} FROM {}", select_clause, self.table_name);
 
         if !self.wheres.is_empty() {
@@ -321,19 +360,27 @@ where
                     source: Box::new(e),
                 }
             })?;
-            results.push(Record::new(self.table_name.clone(), obj, self.key_column.clone(), self.orm.clone()));
+            results.push(Record::new(
+                self.table_name.clone(),
+                obj,
+                self.key_column.clone(),
+                self.orm.clone(),
+            ));
         }
         Ok(results)
     }
 
     pub async fn first(self) -> sqlx::Result<Option<Record<T>>> {
-        let  query = self.limit(1).get().await?;
+        let query = self.limit(1).get().await?;
         Ok(query.into_iter().next())
     }
 
-        pub async fn first_value(self) -> Result<T, sqlx::Error> {
+    pub async fn first_value(self) -> Result<T, sqlx::Error> {
         let query = self.limit(1).get().await?;
-        Ok(query.into_iter().next().ok_or_else(|| sqlx::Error::RowNotFound)?.value)
+        Ok(query
+            .into_iter()
+            .next()
+            .ok_or_else(|| sqlx::Error::RowNotFound)?
+            .value)
     }
-
 }
